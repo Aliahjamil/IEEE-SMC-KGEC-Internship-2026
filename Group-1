@@ -1,1 +1,224 @@
 
+# Crop Recommendation System — Fed-SwiFT
+
+Full project: **PyTorch model training (Centralized + Federated) + Flask backend API + HTML/CSS/JS frontend**, structured so you can open it directly in VS Code and connect frontend ↔ backend easily.
+
+All training logic (model architecture, hyperparameters, data split, FedAvg, Dirichlet Non-IID partitioning) is copied **exactly** from the original notebook — same seed (42), same config — so the accuracy already obtained (Centralized ≈98.18%, IID Fed-SwiFT ≈99.32%, Non-IID Fed-SwiFT ≈97.73%) will reproduce.
+
+```text
+crop-recommendation-system/
+├── backend/
+│   ├── data/
+│   │   └── Crop_recommendation.csv      <-- YOU add this file
+│   ├── models/                          <-- trained weights saved here
+│   ├── results/                         <-- CSV metrics saved here
+│   ├── src/
+│   │   ├── config.py                    <-- all constants (seed, epochs, etc.)
+│   │   ├── model.py                     <-- SwiFT architecture
+│   │   ├── dataset.py                   <-- CropDataset
+│   │   ├── data_pipeline.py             <-- load/encode/split/scale
+│   │   ├── federated.py                 <-- FedAvg, partitions, client training
+│   │   └── utils.py                     <-- train/evaluate loops
+│   ├── train_centralized.py             <-- trains plain SwiFT
+│   ├── train_federated_iid.py           <-- trains IID Fed-SwiFT
+│   ├── train_federated_non_iid.py       <-- trains Non-IID Fed-SwiFT
+│   ├── train_all.py                     <-- runs all three in sequence
+│   ├── app.py                           <-- Flask API (serves predictions)
+│   └── requirements.txt
+└── frontend/
+    ├── index.html                       <-- prediction form (plain HTML/JS)
+    ├── css/style.css
+    └── js/script.js                     <-- calls the Flask API
+```
+
+---
+
+## Step 1 — Open the project in VS Code
+
+1. Open VS Code → **File > Open Folder** → select `crop-recommendation-system`.
+2. Install the **Python** extension in VS Code if you don't have it already.
+
+---
+
+## Step 2 — Add your dataset
+
+Copy `Crop_recommendation.csv` (the same file you used in PyCharm) into:
+
+```text
+backend/data/Crop_recommendation.csv
+```
+
+---
+
+## Step 3 — Create a virtual environment (VS Code terminal)
+
+Open a terminal in VS Code (`Ctrl+``) and run:
+
+```bash
+cd backend
+python -m venv venv
+```
+
+Activate it:
+
+* **Windows (PowerShell):**
+
+```powershell
+venv\Scripts\Activate.ps1
+```
+
+* **Windows (cmd):**
+
+```cmd
+venv\Scripts\activate.bat
+```
+
+* **Mac/Linux:**
+
+```bash
+source venv/bin/activate
+```
+
+In VS Code, also select this interpreter:
+
+`Ctrl+Shift+P` → **Python: Select Interpreter** → choose the one inside `backend/venv`.
+
+---
+
+## Step 4 — Install dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+> If you have a GPU and want CUDA-accelerated `torch`, install PyTorch separately first following the official PyTorch installation instructions, then run the command above — pip will skip torch since it's already installed.
+
+---
+
+## Step 5 — Train the models
+
+You can train all three (Centralized, IID Fed-SwiFT, Non-IID Fed-SwiFT) in one go:
+
+```bash
+python train_all.py
+```
+
+Or run them individually if you only need one:
+
+```bash
+python train_centralized.py
+python train_federated_iid.py
+python train_federated_non_iid.py
+```
+
+Each script prints the exact same per-round/per-epoch logs you saw in the notebook, and saves:
+
+* `models/scaler.pkl` and `models/label_encoder.pkl` (shared preprocessing)
+* `models/centralized_swift.pth`
+* `models/iid_fed_swift.pth` ← **this is the one the API uses by default**
+* `models/non_iid_fed_swift.pth`
+
+This step reproduces training — it will take a couple of minutes on CPU (same as PyCharm), longer for federated rounds.
+
+---
+
+## Step 6 — Start the backend API
+
+Still inside `backend/` (with the venv active):
+
+```bash
+python app.py
+```
+
+You should see:
+
+```text
+Loaded model: iid_fed_swift.pth
+ * Running on http://0.0.0.0:5000
+```
+
+Test it works by opening:
+
+`http://127.0.0.1:5000/health`
+
+in a browser — you should get:
+
+```json
+{"status": "ok", ...}
+```
+
+> **Which model gets served?** By default, `app.py` loads `models/iid_fed_swift.pth` (your best-performing model, 99.32% accuracy). To serve a different one, open `backend/src/config.py` and change `DEFAULT_MODEL_PATH`.
+
+---
+
+## Step 7 — Open the frontend
+
+Open `frontend/index.html` directly in your browser (double-click it, or right-click → **Open with Live Server** if you have that VS Code extension installed).
+
+Fill in the 7 fields:
+
+* N
+* P
+* K
+* Temperature
+* Humidity
+* pH
+* Rainfall
+
+and click **Recommend Crop** — it calls your Flask API at:
+
+```text
+http://127.0.0.1:5000/predict
+```
+
+and displays the predicted crop, the confidence %, and the top-3 alternatives.
+
+> If your frontend and backend end up running on different machines/ports later, just update `API_BASE_URL` at the top of `frontend/js/script.js`.
+
+---
+
+## Step 8 — Plug this into your existing UI
+
+Since you already built your own UI, you don't need to use `frontend/index.html` as-is — just reuse the fetch call from `frontend/js/script.js` inside your own page:
+
+```javascript
+fetch("http://127.0.0.1:5000/predict", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    N: 90, P: 42, K: 43,
+    temperature: 20.87, humidity: 82.0,
+    ph: 6.5, rainfall: 202.93
+  })
+})
+  .then(res => res.json())
+  .then(data => console.log(data));
+// { predicted_crop: "rice", confidence: 99.1, top3: [...], model_used: "..." }
+```
+
+Wire this into whatever button/form you already built.
+
+---
+
+## Notes on keeping accuracy identical
+
+* Same `SEED = 42` used everywhere (Python, NumPy, PyTorch).
+* Same `train_test_split(..., stratify=y_encoded, random_state=42)`.
+* Same `StandardScaler` fit only on train data.
+* Same `SwiFT` architecture (7 feature embeddings → 2-layer Transformer encoder → fusion → classifier head).
+* Same FedAvg weighting by client sample count.
+* Same Dirichlet alpha=0.5 for Non-IID partitioning.
+
+Because everything runs on CPU by default and PyTorch's exact floating-point reduction order can vary slightly across machines/OS, you may see accuracy differ by a fraction of a percent run-to-run — this is normal and not a bug in the code.
+
+---
+
+## Troubleshooting
+
+| Problem                                             | Fix                                                                                   |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `FileNotFoundError: Crop_recommendation.csv`        | Make sure the CSV is at `backend/data/Crop_recommendation.csv`                        |
+| `ModuleNotFoundError: No module named 'flask_cors'` | `pip install flask-cors`                                                              |
+| Frontend shows "Error: Failed to fetch"             | Make sure `python app.py` is running and check `API_BASE_URL` in `script.js`          |
+| CORS error in browser console                       | `flask-cors` is already enabled in `app.py` — make sure you didn't remove `CORS(app)` |
+| Model file not found when starting `app.py`         | Run `train_federated_iid.py` (or `train_all.py`) first — it creates `models/*.pth`    |
